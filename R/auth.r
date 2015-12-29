@@ -21,7 +21,16 @@ get_access_cred <- function() {
   cred <- bq_env$access_cred
   if (is.null(cred)) {
     for (f in bq_env$credential_fetchers) {
-      cred <- f()
+      error <- FALSE
+      tryCatch({
+        cred <- f()
+      }, error = function(e) {
+        write(paste0("Error when fetching OAuth2.0 credentials: ", e$message), stderr())
+        error <- TRUE
+      })
+      if (error) {
+        next
+      }
       if (!is.null(cred)) {
         set_access_cred(cred)
         break
@@ -83,25 +92,37 @@ fetch_oauth2_creds <- function() {
 }
 register_credential_fetcher(fetch_oauth2_creds)
 
+#' Fetches a valid OAuth token using the previously set service
+#' token file via the "two-legged OAuth dance" (2LO).
 fetch_service_token_creds <- function() {
-  if (!is.string(bq_env$service_token_file) || length(bq_env$service_token_file) == 0) {
-    stop("call set_service_token with a valid filename")
-  }
 
   endpoint <- httr::oauth_endpoints("google")
 
-  secrets <- jsonlite::fromJSON(bq_env$service_token_file)
-
   scope = "https://www.googleapis.com/auth/bigquery"
 
-  httr::oauth_service_token(endpoint, secrets, scope)
+  httr::oauth_service_token(endpoint, bq_env$service_token, scope)
 }
 
-#' Sets the OAuth service token to use
+#' Sets the service token to use when fetching the OAuth token
+#' creds. This will throw an error if the file does not exist,
+#' we do not have permissions to read it, or if it is not valid JSON.
 #'
-#' @param The token_file to use, a string
+#' @param token_file The absolute or relative path to the file containing the service token, a string
+#' @seealso Google API documentation:
+#'   \url{https://developers.google.com/identity/protocols/OAuth2ServiceAccount}
 #' @export
 set_service_token <- function(token_file) {
-  bq_env$service_token_file <- token_file
+
+  #' If the file doesn't exist, jsonlite::fromJSON will attempt to parse
+  #' the string literal, which throws a less-than-intuitive error to the
+  #' user of bigrquery::set_service_token
+  if (!file.exists(token_file)) {
+    stop("Invalid service token file; file does not exist")
+  }
+
+  #' This will throw an error if we don't have permissions to read the
+  #' file or if the file contains invalid JSON.
+  bq_env$service_token <- jsonlite::fromJSON(token_file)
+
   register_credential_fetcher(fetch_service_token_creds)
 }
