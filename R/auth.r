@@ -1,12 +1,5 @@
 #' @importFrom httr oauth_endpoint oauth_app oauth2.0_token
-google <- oauth_endpoint(NULL, "auth", "token",
-  base_url = "https://accounts.google.com/o/oauth2")
-bigqr <- oauth_app("google",
-  "465736758727.apps.googleusercontent.com",
-  "fJbIIyoIag0oA6p114lwsV2r")
-
 bq_env <- new.env(parent = emptyenv())
-
 
 #' Get and set access credentials
 #'
@@ -27,11 +20,17 @@ bq_env <- new.env(parent = emptyenv())
 get_access_cred <- function() {
   cred <- bq_env$access_cred
   if (is.null(cred)) {
-    scopes <- c(
-        "https://www.googleapis.com/auth/bigquery",
-        "https://www.googleapis.com/auth/cloud-platform")
     for (f in bq_env$credential_fetchers) {
-      cred <- f(google, bigqr, scopes)
+      error <- FALSE
+      tryCatch({
+        cred <- f()
+      }, error = function(e) {
+        write(paste0("Error when fetching OAuth2.0 credentials: ", e$message), stderr())
+        error <- TRUE
+      })
+      if (error) {
+        next
+      }
       if (!is.null(cred)) {
         set_access_cred(cred)
         break
@@ -78,10 +77,52 @@ register_credential_fetcher <- function(f) {
 #' Set the default mechanism for fetching OAuth2 tokens, namely the
 #' "three-legged OAuth dance" (3LO). This simply asks the user to
 #' authenticate our app via a browser.
-fetch_oauth2_creds <- function(google, bigqr, scopes) {
-  oauth2.0_token(google, bigqr,
-                 scope = c(
-                   "https://www.googleapis.com/auth/bigquery",
-                   "https://www.googleapis.com/auth/cloud-platform"))
+fetch_oauth2_creds <- function() {
+  endpoint <- oauth_endpoint(NULL, "auth", "token",
+                           base_url = "https://accounts.google.com/o/oauth2")
+  app <- oauth_app("google",
+                     "465736758727.apps.googleusercontent.com",
+                     "fJbIIyoIag0oA6p114lwsV2r")
+
+  scopes <- c(
+    "https://www.googleapis.com/auth/bigquery",
+    "https://www.googleapis.com/auth/cloud-platform")
+
+  oauth2.0_token(endpoint, app, scopes)
 }
 register_credential_fetcher(fetch_oauth2_creds)
+
+#' Fetches a valid OAuth token using the previously set service
+#' token file via the "two-legged OAuth dance" (2LO).
+fetch_service_token_creds <- function() {
+
+  endpoint <- httr::oauth_endpoints("google")
+
+  scope = "https://www.googleapis.com/auth/bigquery"
+
+  httr::oauth_service_token(endpoint, bq_env$service_token, scope)
+}
+
+#' Sets the service token to use when fetching the OAuth token
+#' creds. This will throw an error if the file does not exist,
+#' we do not have permissions to read it, or if it is not valid JSON.
+#'
+#' @param token_file The absolute or relative path to the file containing the service token, a string
+#' @seealso Google API documentation:
+#'   \url{https://developers.google.com/identity/protocols/OAuth2ServiceAccount}
+#' @export
+set_service_token <- function(token_file) {
+
+  #' If the file doesn't exist, jsonlite::fromJSON will attempt to parse
+  #' the string literal, which throws a less-than-intuitive error to the
+  #' user of bigrquery::set_service_token
+  if (!file.exists(token_file)) {
+    stop("Invalid service token file; file does not exist")
+  }
+
+  #' This will throw an error if we don't have permissions to read the
+  #' file or if the file contains invalid JSON.
+  bq_env$service_token <- jsonlite::fromJSON(token_file)
+
+  register_credential_fetcher(fetch_service_token_creds)
+}
