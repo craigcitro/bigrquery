@@ -9,7 +9,7 @@ we do not have permissions to read it, or if it is not valid JSON.}
 set_service_token(token_file)
 }
 \arguments{
-\item{The}{absolute or relative path to the file containing the service token, a string}
+\item{token_file}{The absolute or relative path to the file containing the service token, a string}
 }
 \description{
 Sets the service token to use when fetching the OAuth token
